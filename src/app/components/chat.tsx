@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useTheme } from 'next-themes';
 import axios from 'axios';
 
 interface Message {
@@ -19,81 +18,118 @@ interface User {
 }
 
 export default function Chat() {
+  /* ----------- STATE ---------- */
   const [messages, setMessages] = useState<Message[]>([]);
-  const [user, setUser] = useState<User>(() => {
-    const savedUser = localStorage.getItem('user');
-    return savedUser ? JSON.parse(savedUser) : { id: '', name: '', image: '/default-user.png' };
+  const [user, setUser] = useState<User>({
+    id: '',
+    name: '',
+    image: '/default-user.png',
   });
   const [message, setMessage] = useState('');
   const [image, setImage] = useState<File | null>(null);
-  const [isLoginOpen, setIsLoginOpen] = useState(!localStorage.getItem('user'));
-  const [theme, setTheme] = useState<'light' | 'dark' | 'ocean'>(
-    (localStorage.getItem('theme') as 'light' | 'dark' | 'ocean') || 'light'
-  );
+  const [isLoginOpen, setIsLoginOpen] = useState(true);
+  const [theme, setTheme] = useState<'light' | 'dark' | 'ocean'>('light');
+
+  /* ---------- REFS ----------- */
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
 
+  /* -------- MESSAGES POLLING ---------- */
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const response = await axios.get('/api/messages');
-        setMessages(response.data.messages);
-      } catch (error) {
-        console.error('Xabarlar yuklanmadi:', error);
+        const { data } = await axios.get('/api/messages');
+        setMessages(data.messages);
+      } catch (err) {
+        console.error('Xabarlar yuklanmadi:', err);
       }
     };
-    fetchData();
 
-    const interval = setInterval(fetchData, 5000); // 5 soniya interval
+    fetchData();
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, []);
 
+  /* -------- HYDRATE USER & THEME -------- */
   useEffect(() => {
-    // Faqat pastda bo'lganda scroll qilish
-    if (messagesEndRef.current && messagesContainerRef.current) {
-      const isScrolledToBottom =
-        messagesContainerRef.current.scrollHeight - messagesContainerRef.current.scrollTop ===
-        messagesContainerRef.current.clientHeight;
-      if (isScrolledToBottom) {
-        messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-      }
+    if (typeof window === 'undefined') return; // SSR himoyasi
+
+    const savedUser = localStorage.getItem('user');
+    if (savedUser) {
+      setUser(JSON.parse(savedUser));
+      setIsLoginOpen(false);
     }
+
+    const savedTheme = localStorage.getItem('theme') as 'light' | 'dark' | 'ocean' | null;
+    if (savedTheme) setTheme(savedTheme);
+  }, []);
+
+  /* ---------- THEME PERSISTENCE ---------- */
+  useEffect(() => {
     document.body.dataset.theme = theme;
     localStorage.setItem('theme', theme);
-  }, [theme, messages]);
+  }, [theme]);
 
+  /* ---------- AUTO‑SCROLL ---------- */
   useEffect(() => {
-    // Rasm xotirasini tozalash
+    if (!messagesEndRef.current || !messagesContainerRef.current) return;
+
+    const el = messagesContainerRef.current;
+    const atBottom = el.scrollHeight - el.scrollTop === el.clientHeight;
+    if (atBottom) messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  /* ---------- CLEAN UP IMAGE URL ---------- */
+  useEffect(() => {
     return () => {
       if (image) URL.revokeObjectURL(URL.createObjectURL(image));
     };
   }, [image]);
 
+  /* ---------- HELPERS ---------- */
+  const fileToBase64 = (file: File): Promise<string> =>
+    new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result as string);
+      reader.readAsDataURL(file);
+    });
+
+  const handleImageIconClick = () => {
+    fileInputRef.current?.click();
+  };
+
+  const toggleTheme = () =>
+    setTheme((prev) => (prev === 'light' ? 'dark' : prev === 'dark' ? 'ocean' : 'light'));
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  /* ---------- USER LOGIN ---------- */
   const handleUserSettings = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user.name || !image) return; // Rasm yuklash majburiy qilindi
+    if (!user.name || !image) return;
 
     const userId = localStorage.getItem('userId') || Math.random().toString(36).slice(2);
     localStorage.setItem('userId', userId);
 
-    const imageData = await fileToBase64(image); // Faqat yuklangan rasm ishlatiladi
-
+    const imageData = await fileToBase64(image);
     const updatedUser = { id: userId, name: user.name, image: imageData };
+
     setUser(updatedUser);
     localStorage.setItem('user', JSON.stringify(updatedUser));
     setIsLoginOpen(false);
-    setImage(null); // Rasmni tozalash
+    setImage(null);
   };
 
+  /* ---------- SEND MESSAGE ---------- */
   const sendMessage = async () => {
     if (!user.id || (!message.trim() && !image)) return;
 
     try {
       let imageData: string | undefined;
-      if (image) {
-        imageData = await fileToBase64(image);
-      }
+      if (image) imageData = await fileToBase64(image);
 
       const newMessage: Message = {
         id: Math.random().toString(),
@@ -106,46 +142,21 @@ export default function Chat() {
       await axios.post('/api/messages', { type: 'message', data: newMessage });
       setMessage('');
       setImage(null);
-      if (fileInputRef.current) {
-        fileInputRef.current.value = '';
-      }
+      if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (error) {
       console.error('Xabar yuborishda xato:', error);
     }
   };
 
-  const fileToBase64 = (file: File): Promise<string> => {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result as string);
-      reader.readAsDataURL(file);
-    });
-  };
-
-  const handleImageIconClick = () => {
-    fileInputRef.current?.click();
-  };
-
-  const toggleTheme = () => {
-    setTheme((prev) => {
-      if (prev === 'light') return 'dark';
-      if (prev === 'dark') return 'ocean';
-      return 'light';
-    });
-  };
-
-  const scrollToBottom = () => {
-    if (messagesEndRef.current && messagesContainerRef.current) {
-      messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  };
-
+  /* ---------- RENDER ---------- */
   return (
     <div className="chat-container">
+      {/* ---------------- LOGIN MODAL -------------- */}
       {isLoginOpen && (
         <div className="modal-backdrop">
           <form onSubmit={handleUserSettings} className="login-modal">
             <h2>Xush kelibsiz!</h2>
+
             <input
               type="text"
               value={user.name}
@@ -154,8 +165,10 @@ export default function Chat() {
               placeholder="Ismingizni kiriting"
               required
             />
+
             <div className="image-upload">
               <button type="button" onClick={handleImageIconClick} className="image-upload-btn">
+                {/* ikon */}
                 <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                   <path
                     strokeLinecap="round"
@@ -165,31 +178,43 @@ export default function Chat() {
                   />
                 </svg>
               </button>
-              <span>Rasm yuklash (majburiy)</span> {/* Matn o'zgartirildi */}
+              <span>Rasm yuklash (majburiy)</span>
+
               <input
                 type="file"
                 accept="image/*"
                 onChange={(e) => setImage(e.target.files?.[0] || null)}
                 className="hidden"
                 ref={fileInputRef}
-                required // Inputni majburiy qilish
+                required
               />
-              {image && <img src={URL.createObjectURL(image)} alt="Tanlangan rasm" className="preview-img" />}
-              {!image && <p className="error-message">Iltimos, rasm yuklang!</p>} {/* Ogohlantirish qo'shildi */}
+
+              {image ? (
+                <img src={URL.createObjectURL(image)} alt="Tanlangan rasm" className="preview-img" />
+              ) : (
+                <p className="error-message">Iltimos, rasm yuklang!</p>
+              )}
             </div>
-            <button type="submit" className="login-btn" disabled={!image}>Davom etish</button> {/* Tugma faqat rasm bo'lganda faol */}
+
+            <button type="submit" className="login-btn" disabled={!image}>
+              Davom etish
+            </button>
           </form>
         </div>
       )}
 
+      {/* ---------------- MAIN CHAT -------------- */}
       {!isLoginOpen && (
         <>
+          {/* HEADER */}
           <div className="header">
             <div className="user-info">
               <img src={user.image} alt="Profil" className="profile-img" />
               <span>{user.name}</span>
             </div>
+
             <button onClick={toggleTheme} className="theme-toggle">
+              {/* …uchta tema ikonlari — o‘zgarmagan */}
               {theme === 'light' && (
                 <svg className="icon" viewBox="0 0 24 24" fill="currentColor">
                   <circle cx="12" cy="12" r="5" />
@@ -209,6 +234,7 @@ export default function Chat() {
             </button>
           </div>
 
+          {/* MESSAGES */}
           <div className="messages" ref={messagesContainerRef}>
             {messages.map((msg) => (
               <div key={msg.id} className="message-wrapper" style={{ animation: 'slideIn 0.5s ease-out' }}>
@@ -228,6 +254,7 @@ export default function Chat() {
             <div ref={messagesEndRef} />
           </div>
 
+          {/* INPUT AREA */}
           <div className="input-area">
             {image && <img src={URL.createObjectURL(image)} alt="Tanlangan rasm" className="input-preview-img" />}
             <input
@@ -238,7 +265,9 @@ export default function Chat() {
               placeholder="Xabar yozing..."
               onKeyPress={(e) => e.key === 'Enter' && sendMessage()}
             />
+
             <button type="button" onClick={handleImageIconClick} className="icon-btn">
+              {/* rasm ikon */}
               <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <path
                   strokeLinecap="round"
@@ -248,6 +277,7 @@ export default function Chat() {
                 />
               </svg>
             </button>
+
             <input
               type="file"
               accept="image/*"
@@ -255,6 +285,7 @@ export default function Chat() {
               className="hidden"
               ref={fileInputRef}
             />
+
             <button onClick={sendMessage} className="send-btn">
               <svg className="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
@@ -262,7 +293,7 @@ export default function Chat() {
             </button>
           </div>
 
-          {/* Pastga scroll qiluvchi ikona */}
+          {/* SCROLL‑DOWN BUTTON */}
           <button
             className="scroll-to-bottom"
             onClick={scrollToBottom}
